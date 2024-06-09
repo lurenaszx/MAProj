@@ -17,11 +17,13 @@ from copy import deepcopy
 def main(args):
 
     env = make_env(args.scenario)
-    n_agents = env.n
-    n_actions = env.world.dim_p
+    env.reset()
+    n_agents = env.num_agents
+    n_actions = 5
     # env = ActionNormalizedEnv(env)
     # env = ObsEnv(env)
-    n_states = env.observation_space[0].shape[0]
+    # print(env.observation_spaces[0])
+    n_states = 18
 
     torch.manual_seed(args.seed)
 
@@ -54,43 +56,46 @@ def main(args):
         rewardB = 0
         rewardC = 0
         while True:
-
             if args.mode == "train":
-                action = model.choose_action(state, noisy=True)
-                next_state, reward, done, info = env.step(action)
+                observations, infos = env.reset()
+                while env.agents:
+                    actions = model.choose_action(observations, noisy=True)
+                    next_observations, rewards, terminations, truncations, infos = env.step(actions)
 
-                step += 1
-                total_step += 1
-                reward = np.array(reward)
+                    step += 1
+                    total_step += 1
+                    rewards = np.array(rewards)
+                    if True in truncations:
+                        break
+                    rew1 = reward_from_state(next_observations)
+                    rewards = rew1 + (np.array(rewards, dtype=np.float32) / 100.)
+                    accum_reward += sum(rewards)
+                    # print(rewards)
+                    rewardA += rewards[0]
+                    rewardB += rewards[1]
+                    rewardC += rewards[2]
 
-                rew1 = reward_from_state(next_state)
-                reward = rew1 + (np.array(reward, dtype=np.float32) / 100.)
-                accum_reward += sum(reward)
-                rewardA += reward[0]
-                rewardB += reward[1]
-                rewardC += reward[2]
 
-
-                if args.algo == "maddpg" or args.algo == "commnet":
-                    obs = torch.from_numpy(np.stack(state)).float().to(device)
-                    obs_ = torch.from_numpy(np.stack(next_state)).float().to(device)
-                    if step != args.episode_length - 1:
-                        next_obs = obs_
+                    if args.algo == "maddpg" or args.algo == "commnet":
+                        obs = torch.from_numpy(np.stack(observations)).float().to(device)
+                        obs_ = torch.from_numpy(np.stack(next_observations)).float().to(device)
+                        if step != args.episode_length - 1:
+                            next_obs = obs_
+                        else:
+                            next_obs = None
+                        rw_tensor = torch.FloatTensor(rewards).to(device)
+                        ac_tensor = torch.FloatTensor(actions.float()).to(device)
+                        if args.algo == "commnet" and next_obs is not None:
+                            model.memory.push(obs.data, ac_tensor, next_obs, rw_tensor)
+                        if args.algo == "maddpg":
+                            model.memory.push(obs.data, ac_tensor, next_obs, rw_tensor)
+                        obs = next_obs
                     else:
-                        next_obs = None
-                    rw_tensor = torch.FloatTensor(reward).to(device)
-                    ac_tensor = torch.FloatTensor(action).to(device)
-                    if args.algo == "commnet" and next_obs is not None:
-                        model.memory.push(obs.data, ac_tensor, next_obs, rw_tensor)
-                    if args.algo == "maddpg":
-                        model.memory.push(obs.data, ac_tensor, next_obs, rw_tensor)
-                    obs = next_obs
-                else:
-                    model.memory(state, action, reward, next_state, done)
+                        model.memory(observations, actions, rewards, next_observations, terminations)
 
-                state = next_state
+                    observations = next_observations
 
-                if args.episode_length < step or (True in done):
+                if args.episode_length < step or (True in terminations):
                     c_loss, a_loss = model.update(episode)
 
                     print("[Episode %05d] reward %6.4f" % (episode, accum_reward))
@@ -114,24 +119,27 @@ def main(args):
                     # model.reset()
                     break
             elif args.mode == "eval":
-                action = model.choose_action(state, noisy=False)
-                next_state, reward, done, info = env.step(action)
-                step += 1
-                total_step += 1
-                state = next_state
-                reward = np.array(reward)
-                import time
-                time.sleep(0.02)
-                env.render()
+                observations, infos = env.reset()
+                while env.agents:
+                    action = model.choose_action(observations, noisy=False)
+                    next_observations, rewards, terminations, truncations, infos = env.step(action)
+                    step += 1
+                    total_step += 1
+                    observations = next_observations
+                    rewards = np.array(rewards)
+                    import time
+                    time.sleep(0.02)
+                    env.render()
+                    if True in truncations:
+                        break
+                    rew1 = reward_from_state(observations)
+                    rewards = rew1 + (np.array(rewards, dtype=np.float32) / 100.)
+                    accum_reward += sum(rewards)
+                    rewardA += rewards[0]
+                    rewardB += rewards[1]
+                    rewardC += rewards[2]
 
-                rew1 = reward_from_state(next_state)
-                reward = rew1 + (np.array(reward, dtype=np.float32) / 100.)
-                accum_reward += sum(reward)
-                rewardA += reward[0]
-                rewardB += reward[1]
-                rewardC += reward[2]
-
-                if args.episode_length < step or (True in done):
+                if args.episode_length < step or (True in terminations):
                     print("[Episode %05d] reward %6.4f " % (episode, accum_reward))
                     env.reset()
                     break
@@ -145,7 +153,7 @@ if __name__ == '__main__':
     parser.add_argument('--scenario', default="simple_spread", type=str)
     parser.add_argument('--max_episodes', default=1e10, type=int)
     parser.add_argument('--algo', default="commnet", type=str, help="commnet/bicnet/maddpg")
-    parser.add_argument('--mode', default="eval", type=str, help="train/eval")
+    parser.add_argument('--mode', default="train", type=str, help="train/eval")
     parser.add_argument('--episode_length', default=50, type=int)
     parser.add_argument('--memory_length', default=int(1e5), type=int)
     parser.add_argument('--tau', default=0.001, type=float)
@@ -160,8 +168,8 @@ if __name__ == '__main__':
     parser.add_argument('--ou_sigma', default=0.2, type=float)
     parser.add_argument('--epsilon_decay', default=10000, type=int)
     parser.add_argument('--tensorboard', default=True, action="store_true")
-    parser.add_argument("--save_interval", default=5000, type=int)
-    parser.add_argument("--model_episode", default=240000, type=int)
+    parser.add_argument("--save_interval", default=100, type=int)
+    parser.add_argument("--model_episode", default=100, type=int)
     parser.add_argument('--episode_before_train', default=1000, type=int)
     parser.add_argument('--log_dir', default=datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
 

@@ -13,6 +13,7 @@ from algo.commnet.network import CommNetWork_Actor, CommNetWork_Critic
 class CommNet():
 
     def __init__(self, s_dim, a_dim, n_agents, args):
+        self.cuda = torch.cuda.is_available()
         self.s_dim = s_dim
         self.a_dim = a_dim
         self.config = args
@@ -70,17 +71,9 @@ class CommNet():
     def choose_action(self, obs, noisy=True):
         obs = torch.Tensor([obs]).to(self.device)
 
-        action = self.actor(obs).cpu().detach().numpy()
+        distributions = self.actor(obs)
+        action = distributions.sample()
         self.action_log.append(action)
-
-        if noisy:
-            for agent_idx in range(self.n_agents):
-                action[agent_idx] += np.random.randn(2) * self.var[agent_idx]
-
-                if self.var[agent_idx] > 0.05:
-                    self.var[agent_idx] *= 0.999998#0.999998
-
-        action = np.clip(action, -1., 1.)
         # print(action)
         return action
 
@@ -130,17 +123,21 @@ class CommNet():
         action_batch = torch.stack(batch.actions).type(FloatTensor)
         reward_batch = torch.stack(batch.rewards).type(FloatTensor)
         non_final_next_states = torch.stack(batch.next_states).type(FloatTensor)#torch.stack([s for s in batch.next_states if s is not None]).type(FloatTensor)
-        whole_state = state_batch.view(self.batch_size, self.n_agents, -1)
-        whole_action = action_batch.view(self.batch_size, self.n_agents, -1)
-        action_batch.view(self.batch_size, self.n_agents, -1)
-        next_whole_batch = self.actor_target(non_final_next_states).view(self.batch_size, self.n_agents, -1)
+        whole_state = state_batch.view(self.batch_size*self.n_agents, -1)
+        whole_action = action_batch.view(self.batch_size*self.n_agents, -1)
+        action_batch.view(self.batch_size*self.n_agents, -1)
+        next_whole_batch = self.actor_target(non_final_next_states).sample().view(self.batch_size*self.n_agents, -1)
 
         self.actor_optimizer.zero_grad()
         self.critic_optimizer.zero_grad()
         self.actor.zero_grad()
         self.critic.zero_grad()
-        current_Q = self.critic(whole_state,whole_action).view(-1, self.n_agents).cuda()
-        target_Q = self.critic_target(non_final_next_states,next_whole_batch).view(-1, self.n_agents).cuda() # .view(-1, self.n_agents * self.n_actions)
+        current_Q = self.critic(whole_state).gather(1, whole_action.long()).view(-1, self.n_agents)
+        if self.cuda:
+            current_Q = current_Q.cuda()
+        target_Q = self.critic_target(non_final_next_states).gather(1, next_whole_batch.long()).view(-1, self.n_agents)
+        if self.cuda:
+            target_Q = target_Q.cuda()
         target_Q = target_Q * self.GAMMA + reward_batch
         loss_Q = nn.MSELoss()(current_Q, target_Q.detach())
         loss_Q.backward()
@@ -151,8 +148,12 @@ class CommNet():
         self.critic_optimizer.zero_grad()
         self.actor.zero_grad()
         self.critic.zero_grad()
-        whole_action = self.actor(whole_state).view(self.batch_size, self.n_agents, -1)
-        actor_loss = -self.critic(whole_state, whole_action).mean()*100
+        whole_distributions = self.actor(whole_state)
+        # print(whole_distributions)
+        whole_action = whole_distributions.sample().view(-1, 1)
+        whole_logits = whole_distributions.logits.gather(1, whole_action.long())
+        critic_value = self.critic(whole_state).gather(1, whole_action.long()).detach().view(-1, 1)
+        actor_loss = -(whole_logits*critic_value).mean()*100
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1)
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1)

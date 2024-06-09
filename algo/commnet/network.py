@@ -7,7 +7,7 @@ class CommNetWork_Actor(nn.Module):
         self.rnn_hidden_dim = 256
         self.n_agents = 3
         self.n_actions = action_dim
-        self.cuda = True
+        self.cuda = False
         self.batch_size = batch_size
         self.input_shape = input_shape
         self.input_size = input_shape * self.n_agents
@@ -48,8 +48,9 @@ class CommNetWork_Actor(nn.Module):
 
         weights = torch.relu(self.decoding0(h))
         weights = torch.tanh(self.decoding(weights))
+        distribution = torch.distributions.Categorical(logits=weights)
         # print(weights)
-        return weights
+        return distribution
 
 
 class CommNetWork_Critic(nn.Module):
@@ -58,21 +59,22 @@ class CommNetWork_Critic(nn.Module):
         self.rnn_hidden_dim = 256
         self.n_agents = 3
         self.n_actions = action_dim
-        self.cuda = True
+        self.cuda = False
         self.batch_size = batch_size
-        self.input_shape = input_shape + self.n_actions
+        self.input_shape = input_shape
         self.input_size = input_shape * self.n_agents
-        self.encoding = nn.Linear(self.input_shape , self.rnn_hidden_dim)
+        self.encoding = nn.Linear(self.input_shape, self.rnn_hidden_dim)
         self.f_obs = nn.Linear(self.rnn_hidden_dim, self.rnn_hidden_dim)
         self.f_comm = nn.GRUCell(self.rnn_hidden_dim, self.rnn_hidden_dim)#nn.GRUCell(self.rnn_hidden_dim, self.rnn_hidden_dim)
-        self.decoding = nn.Linear(self.rnn_hidden_dim, 1)
+        self.decoding = nn.Linear(self.rnn_hidden_dim, self.n_actions)
 
 
-    def forward(self, obs, act):
-        obs = obs.view(-1, self.n_agents, self.input_shape-self.n_actions).cuda()
+    def forward(self, obs):
+        obs = obs.view(-1, self.n_agents, self.input_shape)
+        if self.cuda:
+            obs = obs.cuda()
         size0 = obs.shape[0]
-        act = act.view(-1, self.n_agents, self.n_actions).cuda()
-        x = torch.cat((obs, act), dim=-1)
+        x = obs
         obs_encoding = torch.relu(self.encoding(x.view(size0*self.n_agents, self.input_shape)))#.contiguous()  # .reshape(-1, self.args.n_agents, self.args.rnn_hidden_dim)
 
         h_out = self.f_obs(obs_encoding)
@@ -97,5 +99,6 @@ class CommNetWork_Critic(nn.Module):
                 c = c.reshape(-1, self.rnn_hidden_dim)
             h = self.f_comm(c,h)
 
-        weights = self.decoding(h).view(size0,self.n_agents,-1)
+        weights = self.decoding(h)
+
         return weights

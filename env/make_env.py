@@ -11,6 +11,29 @@ for all agents. Each element of the list should be a numpy array,
 of size (env.world.dim_p + env.world.dim_c, 1). Physical actions precede
 communication actions in this array. See environment.py for more details.
 """
+class Env_Wrapper:
+    def __init__(self, env):
+        self.env = env
+        env.reset()
+        self.num_agents = env.num_agents
+        self.agents = env.agents
+
+    def reset(self):
+        observations, infos = self.env.reset()
+        observations = list(observations.values())
+        return observations, infos
+
+    def step(self, actions):
+        dic_actions = {}
+        for agent, act in zip(self.env.agents, actions):
+            dic_actions[agent] = act.cpu().detach().numpy()
+        observations, rewards, terminations, truncations, infos = self.env.step(dic_actions)
+        observations, rewards, terminations, truncations = (list(x.values()) for x
+                                                            in [observations, rewards, terminations, truncations])
+        return observations, rewards, terminations, truncations, infos
+
+    def render(self):
+        self.env.render()
 
 def make_env(scenario_name, benchmark=False):
     '''
@@ -29,16 +52,11 @@ def make_env(scenario_name, benchmark=False):
         .action_space       :   Returns the action space for each agent
         .n                  :   Returns the number of Agents
     '''
-    from env.multiagent.environment import MultiAgentEnv
-    import env.multiagent.scenarios as scenarios
+    from pettingzoo.mpe import (
+        simple_spread_v3
+    )
 
     # load scenario from script
-    scenario = scenarios.load(scenario_name + ".py").Scenario()
-    # create world
-    world = scenario.make_world()
-    # create multiagent environment
-    if benchmark:        
-        env = MultiAgentEnv(world, scenario.reset_world, scenario.reward, scenario.observation, scenario.benchmark_data)
-    else:
-        env = MultiAgentEnv(world, scenario.reset_world, scenario.reward, scenario.observation)
+    env = Env_Wrapper(simple_spread_v3.parallel_env(render_mode="rgb_mode", max_cycles=200))
+
     return env
