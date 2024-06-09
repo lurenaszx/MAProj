@@ -47,7 +47,7 @@ def main(args):
 
     while episode < args.max_episodes:
 
-        state = env.reset()
+        observations, infos = env.reset()
 
         episode += 1
         step = 0
@@ -55,18 +55,15 @@ def main(args):
         rewardA = 0
         rewardB = 0
         rewardC = 0
-        while True:
-            if args.mode == "train":
-                observations, infos = env.reset()
-                while env.agents:
-                    actions = model.choose_action(observations, noisy=True)
-                    next_observations, rewards, terminations, truncations, infos = env.step(actions)
+        if args.mode == "train":
+            while env.agents:
+                actions = model.choose_action(observations, noisy=True)
+                next_observations, rewards, terminations, truncations, infos = env.step(actions)
 
-                    step += 1
-                    total_step += 1
-                    rewards = np.array(rewards)
-                    if True in truncations:
-                        break
+                step += 1
+                total_step += 1
+                rewards = np.array(rewards)
+                if not (True in truncations):
                     rew1 = reward_from_state(next_observations)
                     rewards = rew1 + (np.array(rewards, dtype=np.float32) / 100.)
                     accum_reward += sum(rewards)
@@ -84,7 +81,7 @@ def main(args):
                         else:
                             next_obs = None
                         rw_tensor = torch.FloatTensor(rewards).to(device)
-                        ac_tensor = torch.FloatTensor(actions.float()).to(device)
+                        ac_tensor = torch.FloatTensor(actions.float().cpu()).to(device)
                         if args.algo == "commnet" and next_obs is not None:
                             model.memory.push(obs.data, ac_tensor, next_obs, rw_tensor)
                         if args.algo == "maddpg":
@@ -93,7 +90,7 @@ def main(args):
                     else:
                         model.memory(observations, actions, rewards, next_observations, terminations)
 
-                    observations = next_observations
+                observations = next_observations
 
                 if args.episode_length < step or (True in terminations):
                     c_loss, a_loss = model.update(episode)
@@ -115,23 +112,19 @@ def main(args):
                     if episode % args.save_interval == 0 and args.mode == "train":
                         model.save_model(episode)
 
-                    env.reset()
-                    # model.reset()
                     break
-            elif args.mode == "eval":
-                observations, infos = env.reset()
-                while env.agents:
-                    action = model.choose_action(observations, noisy=False)
-                    next_observations, rewards, terminations, truncations, infos = env.step(action)
-                    step += 1
-                    total_step += 1
-                    observations = next_observations
-                    rewards = np.array(rewards)
-                    import time
-                    time.sleep(0.02)
-                    env.render()
-                    if True in truncations:
-                        break
+        elif args.mode == "eval":
+            while env.agents:
+                action = model.choose_action(observations, noisy=False)
+                next_observations, rewards, terminations, truncations, infos = env.step(action)
+                step += 1
+                total_step += 1
+                observations = next_observations
+                rewards = np.array(rewards)
+                import time
+                time.sleep(0.02)
+                env.render()
+                if not (True in truncations):
                     rew1 = reward_from_state(observations)
                     rewards = rew1 + (np.array(rewards, dtype=np.float32) / 100.)
                     accum_reward += sum(rewards)
@@ -154,7 +147,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_episodes', default=1e10, type=int)
     parser.add_argument('--algo', default="commnet", type=str, help="commnet/bicnet/maddpg")
     parser.add_argument('--mode', default="train", type=str, help="train/eval")
-    parser.add_argument('--episode_length', default=50, type=int)
+    parser.add_argument('--episode_length', default=150, type=int)
     parser.add_argument('--memory_length', default=int(1e5), type=int)
     parser.add_argument('--tau', default=0.001, type=float)
     parser.add_argument('--gamma', default=0.95, type=float)

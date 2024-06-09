@@ -104,7 +104,7 @@ class CommNet():
 
         return state_batches, action_batches, reward_batches, next_state_batches, done_batches
 
-    def update(self,i_episode):
+    def update(self, i_episode):
 
         if len(self.memory.memory) < self.batch_size:
             return None, None
@@ -123,33 +123,42 @@ class CommNet():
         action_batch = torch.stack(batch.actions).type(FloatTensor)
         reward_batch = torch.stack(batch.rewards).type(FloatTensor)
         non_final_next_states = torch.stack(batch.next_states).type(FloatTensor)#torch.stack([s for s in batch.next_states if s is not None]).type(FloatTensor)
-        whole_state = state_batch.view(self.batch_size*self.n_agents, -1)
-        whole_action = action_batch.view(self.batch_size*self.n_agents, -1)
-        action_batch.view(self.batch_size*self.n_agents, -1)
-        next_whole_batch = self.actor_target(non_final_next_states).sample().view(self.batch_size*self.n_agents, -1)
 
-        self.actor_optimizer.zero_grad()
+        c_loss.append(self.update_critic(state_batch, action_batch, reward_batch, non_final_next_states))
+        a_loss.append(self.update_actor(state_batch))
+
+        self.train_num = i_episode
+
+        if self.train_num % 200 == 0:
+            soft_update(self.actor, self.actor_target, self.config.tau)
+            soft_update(self.critic, self.critic_target, self.config.tau)
+
+        return sum(c_loss) / len(c_loss), sum(a_loss) / len(a_loss)
+
+    def update_critic(self, states, actions, rewards, next_states):
         self.critic_optimizer.zero_grad()
-        self.actor.zero_grad()
         self.critic.zero_grad()
+        whole_state = states.view(self.batch_size*self.n_agents, -1)
+        whole_action = actions.view(self.batch_size*self.n_agents, -1)
+        next_whole_batch = self.actor_target(next_states).sample().view(self.batch_size*self.n_agents, -1)
         current_Q = self.critic(whole_state).gather(1, whole_action.long()).view(-1, self.n_agents)
         if self.cuda:
             current_Q = current_Q.cuda()
-        target_Q = self.critic_target(non_final_next_states).gather(1, next_whole_batch.long()).view(-1, self.n_agents)
+        target_Q = self.critic_target(next_states).gather(1, next_whole_batch.long()).view(-1, self.n_agents)
         if self.cuda:
             target_Q = target_Q.cuda()
-        target_Q = target_Q * self.GAMMA + reward_batch
+        target_Q = target_Q * self.GAMMA + rewards
         loss_Q = nn.MSELoss()(current_Q, target_Q.detach())
         loss_Q.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1)
         self.critic_optimizer.step()
+        return loss_Q.item()
 
+    def update_actor(self, states):
+        whole_state = states.view(self.batch_size*self.n_agents, -1)
         self.actor_optimizer.zero_grad()
-        self.critic_optimizer.zero_grad()
         self.actor.zero_grad()
-        self.critic.zero_grad()
         whole_distributions = self.actor(whole_state)
-        # print(whole_distributions)
         whole_action = whole_distributions.sample().view(-1, 1)
         whole_logits = whole_distributions.logits.gather(1, whole_action.long())
         critic_value = self.critic(whole_state).gather(1, whole_action.long()).detach().view(-1, 1)
@@ -158,14 +167,7 @@ class CommNet():
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1)
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1)
         self.actor_optimizer.step()
-        c_loss.append(loss_Q.item())
-        a_loss.append(actor_loss.item())
-        self.train_num = i_episode
-        if self.train_num % 200 == 0:
-            soft_update(self.actor, self.actor_target, self.config.tau)
-            soft_update(self.critic, self.critic_target, self.config.tau)
-
-        return sum(c_loss) / len(c_loss), sum(a_loss) / len(a_loss)
+        return actor_loss.item()
 
     def get_loss(self):
         return self.c_loss, self.a_loss

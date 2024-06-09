@@ -7,7 +7,7 @@ class CommNetWork_Actor(nn.Module):
         self.rnn_hidden_dim = 256
         self.n_agents = 3
         self.n_actions = action_dim
-        self.cuda = False
+        self.cuda = torch.cuda.is_available()
         self.batch_size = batch_size
         self.input_shape = input_shape
         self.input_size = input_shape * self.n_agents
@@ -59,7 +59,7 @@ class CommNetWork_Critic(nn.Module):
         self.rnn_hidden_dim = 256
         self.n_agents = 3
         self.n_actions = action_dim
-        self.cuda = False
+        self.cuda = torch.cuda.is_available()
         self.batch_size = batch_size
         self.input_shape = input_shape
         self.input_size = input_shape * self.n_agents
